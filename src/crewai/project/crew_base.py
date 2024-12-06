@@ -34,6 +34,39 @@ def CrewBase(cls: T) -> T:
             self.map_all_agent_variables()
             self.map_all_task_variables()
 
+            # Preserve all decorated functions
+            self._original_functions = {
+                name: method
+                for name, method in cls.__dict__.items()
+                if any(
+                    hasattr(method, attr)
+                    for attr in [
+                        "is_task",
+                        "is_agent",
+                        "is_before_kickoff",
+                        "is_after_kickoff",
+                        "is_kickoff",
+                    ]
+                )
+            }
+
+            # Store specific function types
+            self._original_tasks = self._filter_functions(
+                self._original_functions, "is_task"
+            )
+            self._original_agents = self._filter_functions(
+                self._original_functions, "is_agent"
+            )
+            self._before_kickoff = self._filter_functions(
+                self._original_functions, "is_before_kickoff"
+            )
+            self._after_kickoff = self._filter_functions(
+                self._original_functions, "is_after_kickoff"
+            )
+            self._kickoff = self._filter_functions(
+                self._original_functions, "is_kickoff"
+            )
+
         @staticmethod
         def load_yaml(config_path: Path):
             try:
