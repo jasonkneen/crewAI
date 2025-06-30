@@ -4,7 +4,8 @@ description: Detailed guide on workflow management through processes in CrewAI, 
 icon: bars-staggered
 ---
 
-## Understanding Processes
+## Overview
+
 <Tip>
   Processes orchestrate the execution of tasks by agents, akin to project management in human teams. 
   These processes ensure tasks are distributed and executed efficiently, in alignment with a predefined strategy.
@@ -23,9 +24,7 @@ Processes enable individual agents to operate as a cohesive unit, streamlining t
 To assign a process to a crew, specify the process type upon crew creation to set the execution strategy. For a hierarchical process, ensure to define `manager_llm` or `manager_agent` for the manager agent.
 
 ```python
-from crewai import Crew
-from crewai.process import Process
-from langchain_openai import ChatOpenAI
+from crewai import Crew, Process
 
 # Example: Creating a crew with a sequential process
 crew = Crew(
@@ -40,7 +39,7 @@ crew = Crew(
     agents=my_agents,
     tasks=my_tasks,
     process=Process.hierarchical,
-    manager_llm=ChatOpenAI(model="gpt-4")
+    manager_llm="gpt-4o"
     # or
     # manager_agent=my_manager_agent
 )
