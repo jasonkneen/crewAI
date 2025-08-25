@@ -35,12 +35,12 @@ from pydantic_core import PydanticCustomError
 
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.security import Fingerprint, SecurityConfig
-from crewai.tasks.guardrail_result import GuardrailResult
 from crewai.tasks.output_format import OutputFormat
 from crewai.tasks.task_output import TaskOutput
 from crewai.tools.base_tool import BaseTool
 from crewai.utilities.config import process_config
-from crewai.utilities.constants import NOT_SPECIFIED
+from crewai.utilities.constants import NOT_SPECIFIED, _NotSpecified
+from crewai.utilities.guardrail import process_guardrail, GuardrailResult
 from crewai.utilities.converter import Converter, convert_to_model
 from crewai.utilities.events import (
     TaskCompletedEvent,
@@ -67,10 +67,15 @@ class Task(BaseModel):
         description: Descriptive text detailing task's purpose and execution.
         expected_output: Clear definition of expected task outcome.
         output_file: File path for storing task output.
+        create_directory: Whether to create the directory for output_file if it doesn't exist.
         output_json: Pydantic model for structuring JSON output.
         output_pydantic: Pydantic model for task output.
         security_config: Security configuration including fingerprinting.
         tools: List of tools/resources limited for task execution.
+        allow_crewai_trigger_context: Optional flag to control crewai_trigger_payload injection.
+                              None (default): Auto-inject for first task only.
+                              True: Always inject trigger payload for this task.
+                              False: Never inject trigger payload, even for first task.
     """
 
     __hash__ = object.__hash__  # type: ignore
@@ -95,7 +100,7 @@ class Task(BaseModel):
     agent: Optional[BaseAgent] = Field(
         description="Agent responsible for execution the task.", default=None
     )
-    context: Optional[List["Task"]] = Field(
+    context: Union[List["Task"], None, _NotSpecified] = Field(
         description="Other tasks that will have their output used as context for this task.",
         default=NOT_SPECIFIED,
     )
@@ -114,6 +119,10 @@ class Task(BaseModel):
     output_file: Optional[str] = Field(
         description="A file path to be used to create a file output.",
         default=None,
+    )
+    create_directory: Optional[bool] = Field(
+        description="Whether to create the directory for output_file if it doesn't exist.",
+        default=True,
     )
     output: Optional[TaskOutput] = Field(
         description="Task output, it's final result after being executed", default=None
@@ -158,6 +167,11 @@ class Task(BaseModel):
     end_time: Optional[datetime.datetime] = Field(
         default=None, description="End time of the task execution"
     )
+    allow_crewai_trigger_context: Optional[bool] = Field(
+        default=None,
+        description="Whether this task should append 'Trigger Payload: {crewai_trigger_payload}' to the task description when crewai_trigger_payload exists in crew inputs.",
+    )
+    model_config = {"arbitrary_types_allowed": True}
 
     @field_validator("guardrail")
     @classmethod
@@ -201,7 +215,6 @@ class Task(BaseModel):
             # Check return annotation if present, but don't require it
             return_annotation = sig.return_annotation
             if return_annotation != inspect.Signature.empty:
-
                 return_annotation_args = get_args(return_annotation)
                 if not (
                     get_origin(return_annotation) is tuple
@@ -431,7 +444,11 @@ class Task(BaseModel):
             )
 
             if self._guardrail:
-                guardrail_result = self._process_guardrail(task_output)
+                guardrail_result = process_guardrail(
+                    output=task_output,
+                    guardrail=self._guardrail,
+                    retry_count=self.retry_count,
+                )
                 if not guardrail_result.success:
                     if self.retry_count >= self.max_retries:
                         raise Exception(
@@ -503,8 +520,6 @@ class Task(BaseModel):
         )
         from crewai.utilities.events.crewai_event_bus import crewai_event_bus
 
-        result = self._guardrail(task_output)
-
         crewai_event_bus.emit(
             self,
             LLMGuardrailStartedEvent(
@@ -512,7 +527,13 @@ class Task(BaseModel):
             ),
         )
 
-        guardrail_result = GuardrailResult.from_tuple(result)
+        try:
+            result = self._guardrail(task_output)
+            guardrail_result = GuardrailResult.from_tuple(result)
+        except Exception as e:
+            guardrail_result = GuardrailResult(
+                success=False, result=None, error=f"Guardrail execution error: {str(e)}"
+            )
 
         crewai_event_bus.emit(
             self,
@@ -527,21 +548,32 @@ class Task(BaseModel):
 
     def prompt(self) -> str:
         """Generates the task prompt with optional markdown formatting.
-        
+
         When the markdown attribute is True, instructions for formatting the
         response in Markdown syntax will be added to the prompt.
-        
+
         Returns:
             str: The formatted prompt string containing the task description,
                  expected output, and optional markdown formatting instructions.
         """
-        tasks_slices = [self.description]
+        description = self.description
+
+        should_inject = self.allow_crewai_trigger_context
+
+        if should_inject and self.agent:
+            crew = getattr(self.agent, 'crew', None)
+            if crew and hasattr(crew, '_inputs') and crew._inputs:
+                trigger_payload = crew._inputs.get("crewai_trigger_payload")
+                if trigger_payload is not None:
+                    description += f"\n\nTrigger Payload: {trigger_payload}"
+
+        tasks_slices = [description]
 
         output = self.i18n.slice("expected_output").format(
             expected_output=self.expected_output
         )
-        tasks_slices = [self.description, output]
-        
+        tasks_slices = [description, output]
+
         if self.markdown:
             markdown_instruction = """Your final answer MUST be formatted in Markdown syntax.
 Follow these guidelines:
@@ -745,8 +777,10 @@ Follow these guidelines:
             resolved_path = Path(self.output_file).expanduser().resolve()
             directory = resolved_path.parent
 
-            if not directory.exists():
+            if self.create_directory and not directory.exists():
                 directory.mkdir(parents=True, exist_ok=True)
+            elif not self.create_directory and not directory.exists():
+                raise RuntimeError(f"Directory {directory} does not exist and create_directory is False")
 
             with resolved_path.open("w", encoding="utf-8") as file:
                 if isinstance(result, dict):

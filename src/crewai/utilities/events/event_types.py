@@ -4,6 +4,7 @@ from .agent_events import (
     AgentExecutionCompletedEvent,
     AgentExecutionErrorEvent,
     AgentExecutionStartedEvent,
+    LiteAgentExecutionCompletedEvent,
 )
 from .crew_events import (
     CrewKickoffCompletedEvent,
@@ -57,6 +58,17 @@ from .knowledge_events import (
     KnowledgeSearchQueryFailedEvent,
 )
 
+from .memory_events import (
+    MemorySaveStartedEvent,
+    MemorySaveCompletedEvent,
+    MemorySaveFailedEvent,
+    MemoryQueryStartedEvent,
+    MemoryQueryCompletedEvent,
+    MemoryQueryFailedEvent,
+    MemoryRetrievalStartedEvent,
+    MemoryRetrievalCompletedEvent,
+)
+
 EventTypes = Union[
     CrewKickoffStartedEvent,
     CrewKickoffCompletedEvent,
@@ -69,6 +81,7 @@ EventTypes = Union[
     CrewTrainFailedEvent,
     AgentExecutionStartedEvent,
     AgentExecutionCompletedEvent,
+    LiteAgentExecutionCompletedEvent,
     TaskStartedEvent,
     TaskCompletedEvent,
     TaskFailedEvent,
@@ -96,4 +109,12 @@ EventTypes = Union[
     KnowledgeQueryCompletedEvent,
     KnowledgeQueryFailedEvent,
     KnowledgeSearchQueryFailedEvent,
+    MemorySaveStartedEvent,
+    MemorySaveCompletedEvent,
+    MemorySaveFailedEvent,
+    MemoryQueryStartedEvent,
+    MemoryQueryCompletedEvent,
+    MemoryQueryFailedEvent,
+    MemoryRetrievalStartedEvent,
+    MemoryRetrievalCompletedEvent,
 ]

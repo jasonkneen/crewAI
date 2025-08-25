@@ -20,7 +20,10 @@ from crewai.utilities.errors import AgentRepositoryError
 from crewai.utilities.exceptions.context_window_exceeding_exception import (
     LLMContextLengthExceededException,
 )
+from rich.console import Console
+from crewai.cli.config import Settings
 
+console = Console()
 
 def parse_tools(tools: List[BaseTool]) -> List[CrewStructuredTool]:
     """Parse tools to be used for the task."""
@@ -142,18 +145,18 @@ def get_llm_response(
     messages: List[Dict[str, str]],
     callbacks: List[Any],
     printer: Printer,
+    from_task: Optional[Any] = None,
+    from_agent: Optional[Any] = None,
 ) -> str:
     """Call the LLM and return the response, handling any invalid responses."""
     try:
         answer = llm.call(
             messages,
             callbacks=callbacks,
+            from_task=from_task,
+            from_agent=from_agent,
         )
     except Exception as e:
-        printer.print(
-            content=f"Error during LLM call: {e}",
-            color="red",
-        )
         raise e
     if not answer:
         printer.print(
@@ -215,9 +218,6 @@ def handle_agent_action_core(
     if show_logs:
         show_logs(formatted_answer)
 
-    if messages is not None:
-        messages.append({"role": "assistant", "content": tool_result.result})
-
     return formatted_answer
 
 
@@ -228,12 +228,17 @@ def handle_unknown_error(printer: Any, exception: Exception) -> None:
         printer: Printer instance for output
         exception: The exception that occurred
     """
+    error_message = str(exception)
+
+    if "litellm" in error_message:
+        return
+
     printer.print(
         content="An unknown error occurred. Please check the details below.",
         color="red",
     )
     printer.print(
-        content=f"Error details: {exception}",
+        content=f"Error details: {error_message}",
         color="red",
     )
 
@@ -395,7 +400,7 @@ def show_agent_logs(
     if not verbose:
         return
 
-    agent_role = agent_role.split("\n")[0]
+    agent_role = agent_role.partition("\n")[0]
 
     if formatted_answer is None:
         # Start logs
@@ -438,6 +443,13 @@ def show_agent_logs(
             )
 
 
+def _print_current_organization():
+    settings = Settings()
+    if settings.org_uuid:
+        console.print(f"Fetching agent from organization: {settings.org_name} ({settings.org_uuid})", style="bold blue")
+    else:
+        console.print("No organization currently set. We recommend setting one before using: `crewai org switch <org_id>` command.", style="yellow")
+
 def load_agent_from_repository(from_repository: str) -> Dict[str, Any]:
     attributes: Dict[str, Any] = {}
     if from_repository:
@@ -447,15 +459,18 @@ def load_agent_from_repository(from_repository: str) -> Dict[str, Any]:
         from crewai.cli.plus_api import PlusAPI
 
         client = PlusAPI(api_key=get_auth_token())
+        _print_current_organization()
         response = client.get_agent(from_repository)
         if response.status_code == 404:
             raise AgentRepositoryError(
-                f"Agent {from_repository} does not exist, make sure the name is correct or the agent is available on your organization"
+                f"Agent {from_repository} does not exist, make sure the name is correct or the agent is available on your organization."
+                f"\nIf you are using the wrong organization, switch to the correct one using `crewai org switch <org_id>` command.",
             )
 
         if response.status_code != 200:
             raise AgentRepositoryError(
                 f"Agent {from_repository} could not be loaded: {response.text}"
+                f"\nIf you are using the wrong organization, switch to the correct one using `crewai org switch <org_id>` command.",
             )
 
         agent = response.json()
@@ -464,9 +479,16 @@ def load_agent_from_repository(from_repository: str) -> Dict[str, Any]:
                 attributes[key] = []
                 for tool in value:
                     try:
-                        module = importlib.import_module("crewai_tools")
+                        module = importlib.import_module(tool["module"])
                         tool_class = getattr(module, tool["name"])
-                        attributes[key].append(tool_class())
+
+                        tool_value = tool_class(**tool["init_params"])
+
+                        if isinstance(tool_value, list):
+                            attributes[key].extend(tool_value)
+                        else:
+                            attributes[key].append(tool_value)
+
                     except Exception as e:
                         raise AgentRepositoryError(
                             f"Tool {tool['name']} could not be loaded: {e}"
